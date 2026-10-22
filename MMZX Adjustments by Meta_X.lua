@@ -673,6 +673,39 @@ end
 local prev_frame_hitboxes = {}
 local enable_hitbox_viewer = false
 local enable_hitbox_viewer_pressed = false
+local function display_collision_contact()
+	local contact_state = api.mem.r.u[8](adr.grounded_state)
+	if contact_state == 1 or contact_state == 4 then
+		return
+	end
+
+	local cam_pos_x = api.mem.r.u[32](adr.camera_x)
+	local cam_pos_y = api.mem.r.u[32](adr.camera_y)
+	local player_x = api.mem.r.u[32](adr.x_pos)
+	local player_y = api.mem.r.u[32](adr.y_pos)
+	local screen_x = (player_x - cam_pos_x) / 0x100 + 128
+	local screen_y = (player_y - cam_pos_y) / 0x100 + 96
+
+	if contact_state == 0 then
+		api.gui.rect({
+			x = math.floor(screen_x - 8),
+			y = math.floor(screen_y),
+			w = 16,
+			h = 2,
+			line = "0x00FFFFFF",
+			fill = "0x00FF0080"
+		})
+	elseif contact_state == 3 then
+		api.gui.rect({
+			x = math.floor(screen_x - 8),
+			y = math.floor(screen_y - 8),
+			w = 16,
+			h = 2,
+			line = "0xFFFFFFFF",
+			fill = "0xFFFFFF80"
+		})
+	end
+end
 local function display_hitboxes()
 	-- Enable with Select+B
 	if api.joy.get.select() and api.joy.get.b() then
@@ -697,6 +730,11 @@ local function display_hitboxes()
 				-- api.gui.rect(box.x1, box.y1, box.x2, box.y2)
 				api.gui.rect(box)
 			end
+		end
+		local pause_state = api.mem.r.u[8](adr.is_paused)
+		local paused_value = jp and 64 or 192
+		if pause_state ~= paused_value then
+			display_collision_contact()
 		end
 
 		local next_frame_hitboxes = {}
@@ -741,14 +779,86 @@ local function display_hitboxes()
 	end
 end
 
+local collision_map = {}
+local collision_map_room = nil
+local function display_collision_map()
+	local pause_state = api.mem.r.u[8](adr.is_paused)
+	local paused_value = jp and 64 or 192
+	if pause_state == paused_value then
+		return
+	end
+
+	local room = api.mem.r.u[32](adr.current_room)
+	if collision_map_room ~= room then
+		collision_map = {}
+		collision_map_room = room
+	end
+
+	local contact_state = api.mem.r.u[8](adr.grounded_state)
+	if contact_state == 0 or contact_state == 2 or contact_state == 3 then
+		local player_x = api.mem.r.u[32](adr.x_pos)
+		local player_y = api.mem.r.u[32](adr.y_pos)
+		local world_x = math.floor(player_x / 0x100 + 0.5)
+		local world_y = math.floor(player_y / 0x100 + 0.5)
+		if contact_state == 2 then
+			if api.joy.get.left() then
+				world_x = world_x - 12
+			elseif api.joy.get.right() then
+				world_x = world_x + 10
+			else
+				local x_velocity = api.mem.r.s[32](adr.x_vel)
+				if x_velocity < 0 then
+					world_x = world_x - 12
+				elseif x_velocity > 0 then
+					world_x = world_x + 10
+				end
+			end
+		end
+		local point_key = world_x .. ":" .. world_y .. ":" .. contact_state
+
+		if collision_map[point_key] == nil then
+			collision_map[point_key] = {
+				x = world_x,
+				y = world_y,
+				state = contact_state
+			}
+		end
+	end
+
+	local cam_pos_x = api.mem.r.u[32](adr.camera_x) / 0x100
+	local cam_pos_y = api.mem.r.u[32](adr.camera_y) / 0x100
+	for _, point in pairs(collision_map) do
+		local screen_x = point.x - cam_pos_x + 128
+		local screen_y = point.y - cam_pos_y + 96
+		local color = point.state == 0 and "0x00FFFFFF"
+			or point.state == 2 and "0xFFFF00FF"
+			or "0xFFFFFFFF"
+
+		api.gui.rect({
+			x = math.floor(screen_x),
+			y = math.floor(screen_y),
+			w = 0,
+			h = 0,
+			line = color,
+			fill = color
+		})
+	end
+end
+
 local display_information_pressed = false
-local displayed_info = 2 -- 0 = none, 1 = velocity, 2 = position
+local previous_displayed_info = 2
+local displayed_info = 2 -- 0 = none, 1 = velocity, 2 = position, 3 = collision map
 local function display_information()
 	local switch_pressed = api.joy.get.select() and api.joy.get.a()
 	if switch_pressed and not display_information_pressed then
-		displayed_info = (displayed_info + 1) % 3
+		displayed_info = (displayed_info + 1) % 4
 	end
 	display_information_pressed = switch_pressed
+
+	if previous_displayed_info == 3 and displayed_info ~= 3 then
+		api.gui.clear()
+	end
+	previous_displayed_info = displayed_info
 
 	if displayed_info == 0 then
 		return
@@ -760,6 +870,8 @@ local function display_information()
 		local current_x = api.mem.r.u[32](adr.x_pos) / 256.0
 		local current_y = api.mem.r.u[32](adr.y_pos) / 256.0
 		gui.text(10, 20, string.format("Position: (%0.4f, %0.4f)", current_x, current_y), "white", "black")
+	elseif displayed_info == 3 then
+		gui.text(10, 20, "Collision map: recording contact points", "white", "black")
 	end
 end
 
@@ -802,7 +914,10 @@ local function mods()
 		-- Desmume note: most of these colors are totally off on desmume due to a bug with its API
 	end
 
-	display_information() -- displays velocity or position on screen, depending on value of displayed_info variable
+	display_information() -- displays velocity, position, or collision-map status
+	if displayed_info == 3 then
+		display_collision_map()
+	end
 end
 
 -- define loop for drastic
