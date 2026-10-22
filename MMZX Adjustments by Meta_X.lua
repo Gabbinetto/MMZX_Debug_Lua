@@ -1,66 +1,14 @@
--- Mega Man ZX adjustments v3.1.0 by Meta_X --
--- For Mega Man ZX (JP or EN) on BizHawk, DeSmuME, and DraStic --
---List of changes (disable individual ones by commenting out the function call in the main loop at the very bottom):
---Instantly switch models by pressing Select + another key (L: X, R: ZX, Up: HX, Down: FX, Left: LX, Right: PX, A: OX)
---All: Give 1 Weapon Energy to all models every 3 seconds, and refill WE completely at transervers or upon death
---X:  Can perform a small double jump
---    Can switch elements with overdrive button, VERY EXPERIMENTAL!! Do not recommend (off by default)
---ZX: Can perform a small double jump
---HX: Can airdash continuously and repeatedly while overdrive is active and move perpendicularly
---FX: Can perform a recoil-rod style superjump by pressing Jump while using Ground Breaker
---    Can also perform a double jump by holding down while releasing a charge fireball in the air
---    Ground Breaker now multihits vs bosses and can be performed from a lv1 charge
---LX: Can now perform a skullcrush like Model ZX by holding down during jumpslash [planned: deals extra damage]
---    Ice dragon can be performed from a lv1 charge and refunds 2 energy points
---    Ice sled now instantly accelerates to full speed when hit
---    Swimming no longer has a significant deceleration period at the end
---    Swimdashing is now constant speed (instead of decelerating)
---    Infinite swimdashing while in overdrive (or optionally without overdrive)
---    LX can spinslash in the air like model ZX [experimental]
---PX: Can spend 1 WE to perform a MMX6 Shadow Armor-style highjump by pressing Up and Jump
---    Can throw kunai straight forward using subweapon button (use main weapon for the usual kunai spread)
---    Can double jump off of a thrown shuriken
---OX: Can perform a small double jump (or full double jump if overdrive is active)
---    [planned: Skullcrush buffed to do extra damage like it's supposed to]
---    [planned: Giga attacks buffed to have iframes?]
---Dash trail continuously cycles through different colors
+-- Mega Man ZX debug and adjustment script
+-- Originally created by Meta_X; subsequent changes retain and build on that work.
+-- For Mega Man ZX (JP or EN) on BizHawk, DeSmuME, and DraStic.
 --
---Known issues:
---Very risky to reset game or load another save with script running. Disable it before switching then run it again while playing the new file
---Models you haven't yet switched to with the script active can appear on the pause menu with their weapon energy filling past their cap
---Currently assumes Attack Mode Type A (because wtf are you doing otherwise)
---Double jump (and the other custom jump abilities) can have some strange behavior around ceilings and platforms
---  Cannot drop through a platform then double jump and land on that same platform
---Walljumping while not sliding uses up your doublejump
---You must use a different attack before being able to FX superjump again (eg. plain bullet), and it has trouble working on certain terrain
---Ice dragon early charge doesn't always work, such as when released during a cutscene
---X Element switch only works against bosses and is constantly activating and doesnt transfer properly and... just don't use it cept to mess around lol
---
---Changelog:
---v3.1.0
---  Added hitbox viewer; enable ingame by pressing Select + B
---  Fixed bug with FX fireball jump where a bullet fired after double jumping might travel downward
---  Added rectangle drawing support for Bizhawk and Desmume (Bizhawk is preferred)
---  Minor refactoring of a few addresses
---v3.0.0
---  refactored to support bizhawk, desmume, and drastic with a single file
---  changed function arguments format to be more clear
---  added model_switch function for instant switching without loading another cheat
---  converted lx_infinite_swimdash to lx_improved_swimdash
---    you can now swimdash at constant speed, instead of decelerating the whole time
---  fixed minor bug with lx_remove_minimum_swim_distance being directionally inconsistent
---  re-added an old experimental aerial spinslash ability for LX
---  improved velocity writing behavior
---  improved FX doublejump input detection
---    fixed some glitchy behavior + removed ability to doublejump without a fireball
---  improved PX shuriken jump
---    prevent multiple jumps during a single airtime or shuriken
---    added jumping animation
---  added jumping animation for x/zx/ox doublejumps
---  fixed rainbow dash trail affecting pause menu sprites
---??? (long WIP hiatus)
---v2.3.1
---  updated description to account for support for custom control settings
+-- Active features:
+-- * Cycle through the eight models with Select + Left/Right.
+-- * Toggle moon jump with Select + Down.
+-- * Cycle the information overlay with Select + A
+-- * Toggle the hitbox viewer with Select + B (BizHawk and DeSmuME).
+--   It displays player/enemy hurtboxes, attack hitboxes, and collision contact.
+-- * Record and display collision-map contact points as the player moves.
 
 
 ------------------------------- API HANDLER LAYER -------------------------------
@@ -160,6 +108,7 @@ local api = {
 	},
 	gui = {
 		rect = nil,
+		text = nil,
 		clear = function() end -- not required
 	}
 }
@@ -229,6 +178,18 @@ if emu_name == "bizhawk" then
 			gui.drawRectangle(x, y, w, h, line, fill)
 		end
 	end
+	api.gui.text       = function(x, y, text, color, back)
+		local layout = nds.getscreenlayout()
+		if layout == "Bottom Only" then
+			gui.drawText(x, y, text, color, back)
+		elseif layout == "Hybrid" then
+			gui.drawText(x * 2, y * 2, text, color, back)
+		elseif layout == "Horizontal" then
+			gui.drawText(x + 256, y, text, color, back)
+		elseif layout ~= "Top Only" then
+			gui.drawText(x, y + 192, text, color, back)
+		end
+	end
 	api.gui.clear      = gui.clearGraphics
 elseif emu_name == "desmume" then
 	api.mem.r.u[8]     = memory.readbyte
@@ -280,6 +241,9 @@ elseif emu_name == "desmume" then
 		gui.rect(x1, y1, x2, y2, fill, line)
 		-- print("rect(".. x1 ..", ".. y1 ..", ".. x2 ..",".. y2 ..")")
 	end
+	api.gui.text       = function(x, y, text, color, back)
+		gui.text(x, y + 192, text, color, back)
+	end
 elseif emu_name == "drastic" then
 	api.mem.r.u[8]     = drastic.get_ds_memory_arm9_8
 	api.mem.r.s[8]     = drastic.get_ds_memory_arm9_8
@@ -305,6 +269,7 @@ elseif emu_name == "drastic" then
 	api.joy.get.r      = function() return (bit_and(drastic.get_buttons(), drastic.C.BUTTON_R) ~= 0) end
 	api.joy.get.start  = function() return (bit_and(drastic.get_buttons(), drastic.C.BUTTON_START) ~= 0) end
 	api.joy.get.select = function() return (bit_and(drastic.get_buttons(), drastic.C.BUTTON_SELECT) ~= 0) end
+	api.gui.text       = function() end
 	-- joy.set is unused rn but these are proof of concept
 	-- api.joy.set.left    = function (pressed) return drastic.set_buttons(pressed and bit_or(drastic.get_buttons(), drastic.C.BUTTON_LEFT) or bit_and(drastic.get_buttons(), bit_not(drastic.C.BUTTON_LEFT))) end
 	-- api.joy.set.right   = function (pressed) return drastic.set_buttons(pressed and bit_or(drastic.get_buttons(), drastic.C.BUTTON_RIGHT) or bit_and(drastic.get_buttons(), bit_not(drastic.C.BUTTON_RIGHT))) end
@@ -564,6 +529,31 @@ local function model_switch()
 		end
 	end
 	model_switch_pressed = switch_pressed
+end
+
+local moon_jump_enabled = false
+local moon_jump_pressed = false
+local function moon_jump()
+	local toggle_pressed = api.joy.get.select() and api.joy.get.down()
+	if toggle_pressed and not moon_jump_pressed then
+		moon_jump_enabled = not moon_jump_enabled
+	end
+	moon_jump_pressed = toggle_pressed
+
+	if not moon_jump_enabled or not read_button("jump") then
+		return
+	end
+
+	local contact_state = api.mem.r.u[8](adr.grounded_state)
+	if contact_state == 1 or contact_state == 2 or contact_state == 4 then
+		api.mem.w.s[32](adr.y_vel, -0x300)
+	end
+end
+
+local function display_moon_jump_status()
+	if moon_jump_enabled then
+		api.gui.text(5, 175, "Moon Jump: ON", "white", "black")
+	end
 end
 
 
@@ -847,7 +837,7 @@ end
 
 local display_information_pressed = false
 local previous_displayed_info = 2
-local displayed_info = 2 -- 0 = none, 1 = velocity, 2 = position, 3 = collision map
+local displayed_info = 0 -- 0 = none, 1 = velocity, 2 = position, 3 = collision map
 local function display_information()
 	local switch_pressed = api.joy.get.select() and api.joy.get.a()
 	if switch_pressed and not display_information_pressed then
@@ -865,13 +855,13 @@ local function display_information()
 	elseif displayed_info == 1 then
 		local current_x_vel = api.mem.r.s[32](adr.x_vel) / 256.0
 		local current_y_vel = api.mem.r.s[32](adr.y_vel) / 256.0
-		gui.text(10, 20, string.format("Velocity: (%0.3f, %0.3f)", current_x_vel, current_y_vel), "white", "black")
+		gui.text(2, 20, string.format("Velocity:\n(%0.3f, %0.3f)", current_x_vel, current_y_vel), "white", "black")
 	elseif displayed_info == 2 then
 		local current_x = api.mem.r.u[32](adr.x_pos) / 256.0
 		local current_y = api.mem.r.u[32](adr.y_pos) / 256.0
-		gui.text(10, 20, string.format("Position: (%0.4f, %0.4f)", current_x, current_y), "white", "black")
+		gui.text(2, 20, string.format("Position:\n(%0.4f, %0.4f)", current_x, current_y), "white", "black")
 	elseif displayed_info == 3 then
-		gui.text(10, 20, "Collision map: recording contact points", "white", "black")
+		gui.text(2, 20, "Collision map:\nrecording contact points", "white", "black")
 	end
 end
 
@@ -899,6 +889,7 @@ local function mods()
 
 	model_switch() -- press Select + another button to instantly switch model
 	-- L: X, R: ZX, Up: HX, Down: FX, Left: LX, Right: PX, A: OX
+	moon_jump() -- toggle with Select + Down, then hold Jump while airborne
 
 	if emu_name ~= "drastic" then
 		display_hitboxes()
@@ -918,6 +909,7 @@ local function mods()
 	if displayed_info == 3 then
 		display_collision_map()
 	end
+	display_moon_jump_status()
 end
 
 -- define loop for drastic
